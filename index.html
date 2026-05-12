@@ -104,4 +104,4 @@ function corsHeaders() {
 
 function err400(msg) {
   return { statusCode: 400, headers: corsHeaders(), body: JSON.stringify({ ok: false, error: msg }) };
-}
+} 
