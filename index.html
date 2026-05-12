@@ -1,107 +1,824 @@
-// netlify/functions/enviar-lote.js
-//
-// Proxy entre la página de captura (Netlify) y el endpoint de Apps Script (GAS).
-// Necesario porque GAS no puede emitir cabeceras CORS en doPost.
-//
-// Variables de entorno requeridas en el panel de Netlify:
-//   GAS_URL        → URL de la web app de Apps Script (la que sirve el HTML)
-//   NETLIFY_TOKEN  → misma clave secreta que está en Script Properties → NETLIFY_TOKEN
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#1a4f42">
+  <meta name="mobile-web-app-capable" content="yes">
+  <title>Captura por vídeo</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400..800&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=Lora:ital,wght@0,400..700;1,400..600&display=swap" rel="stylesheet">
+  <style>
+    /* ── Design tokens idénticos a la app GAS ───────────────────── */
+    :root {
+      --bg:#f5f3ee; --surface:#ffffff; --surface-2:#faf8f3; --surface-sunken:#edeae0;
+      --text:#16201e; --text-2:#384540; --text-muted:#6b7b74; --text-inverse:#f8f7f2;
+      --border:#dbd6c9; --border-2:#c8c1ae;
+      --primary:#1a4f42; --primary-light:#2a7062; --primary-ink:#0d3128;
+      --primary-soft:#dce9e5; --primary-tint:#edf4f1;
+      --accent:#b06a22; --accent-ink:#7a4310; --accent-soft:#f5e8d5;
+      --danger:#9e2d22; --danger-soft:#fbeae6;
+      --success:#1e6644; --success-soft:#dff0e7;
+      --warning:#a05c08; --warning-soft:#fbefd4;
+      --shadow-sm:0 1px 3px rgba(22,32,30,.07),0 1px 2px rgba(22,32,30,.05);
+      --shadow-md:0 4px 16px rgba(22,32,30,.09),0 2px 6px rgba(22,32,30,.05);
+      --shadow-lg:0 16px 40px rgba(22,32,30,.13),0 6px 14px rgba(22,32,30,.06);
+      --r-sm:8px; --r-md:12px; --r-lg:18px; --r-xl:26px; --r-pill:999px;
+      --ease-out:cubic-bezier(.22,.96,.38,1); --ease-spring:cubic-bezier(.2,.9,.25,1.12);
+      --safe-top:env(safe-area-inset-top,0px); --safe-bottom:env(safe-area-inset-bottom,0px);
+      --topbar-h:58px;
+      --font-ui:'Syne',system-ui,sans-serif;
+      --font-body:'Lora',Georgia,serif;
+      --font-mono:'DM Mono',monospace;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg:#111815; --surface:#1a2420; --surface-2:#1e2a25; --surface-sunken:#0e1412;
+        --text:#e8ece9; --text-2:#b8c5be; --text-muted:#7a9087; --text-inverse:#0f1512;
+        --border:#263330; --border-2:#344440;
+        --primary:#4fb896; --primary-light:#6dd4b0; --primary-ink:#9fdecb;
+        --primary-soft:#1a3830; --primary-tint:#152c24;
+        --accent:#d08840; --accent-ink:#f0aa6a; --accent-soft:#3a2615;
+        --danger:#e06050; --danger-soft:#3a1818;
+        --success:#5aaa7a; --success-soft:#182e22;
+        --warning:#d4943a; --warning-soft:#302010;
+        --shadow-sm:0 1px 3px rgba(0,0,0,.4);
+        --shadow-md:0 4px 16px rgba(0,0,0,.5);
+        --shadow-lg:0 16px 40px rgba(0,0,0,.55);
+      }
+    }
 
-exports.handler = async (event) => {
-  // Solo se acepta POST (el navegador puede enviar un preflight OPTIONS)
-  if (event.httpMethod === 'OPTIONS') {
-    return {
-      statusCode: 204,
-      headers: {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type'
-      },
-      body: ''
-    };
-  }
+    /* ── Reset & base ────────────────────────────────────────────── */
+    *,*::before,*::after{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+    html,body{margin:0;padding:0;height:100%;overflow:hidden}
+    body{font-family:var(--font-ui);font-size:16px;line-height:1.5;color:var(--text);
+      background:var(--bg);-webkit-font-smoothing:antialiased;
+      overscroll-behavior:none;touch-action:manipulation}
+    h1,h2,h3{font-family:var(--font-body);font-style:italic;letter-spacing:-.01em;color:var(--text);margin:0}
+    h2{font-size:1.25rem;font-weight:600;line-height:1.3}
+    h3{font-family:var(--font-ui);font-style:normal;font-size:1rem;font-weight:700;
+      line-height:1.3;letter-spacing:.01em}
+    p{margin:0;color:var(--text-2);line-height:1.6;font-family:var(--font-body);font-size:.95rem}
 
-  if (event.httpMethod !== 'POST') {
-    return {
-      statusCode: 405,
-      headers: corsHeaders(),
-      body: JSON.stringify({ ok: false, error: 'Método no permitido.' })
-    };
-  }
+    /* ── Layout ──────────────────────────────────────────────────── */
+    .app{display:flex;flex-direction:column;height:100dvh;max-width:640px;
+      margin:0 auto;background:var(--bg);position:relative;isolation:isolate}
 
-  // Leer variables de entorno
-  const gasUrl = process.env.GAS_URL       || '';
-  const token  = process.env.NETLIFY_TOKEN || '';
+    /* ── Topbar ──────────────────────────────────────────────────── */
+    .topbar{flex:0 0 auto;height:calc(var(--topbar-h) + var(--safe-top));
+      padding:calc(var(--safe-top) + 6px) 10px 6px;
+      display:flex;align-items:center;gap:6px;background:var(--bg);
+      border-bottom:1px solid var(--border);position:relative;z-index:10}
+    .topbar-title{flex:1;text-align:center;font-family:var(--font-ui);font-size:.9rem;
+      font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text);
+      white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .icon-btn{width:44px;height:44px;border:0;border-radius:var(--r-pill);
+      background:transparent;color:var(--text);display:inline-flex;
+      align-items:center;justify-content:center;cursor:pointer;
+      transition:background .15s ease,transform .15s ease;flex-shrink:0}
+    .icon-btn:active{transform:scale(.90);background:var(--surface-sunken)}
+    .icon-btn svg{width:22px;height:22px;stroke:currentColor;fill:none;
+      stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+    .lot-badge-top{display:inline-flex;align-items:center;justify-content:center;
+      min-width:26px;height:26px;padding:0 7px;border-radius:var(--r-pill);
+      background:var(--primary);color:#fff;font-family:var(--font-mono);
+      font-size:.78rem;font-weight:600;font-variant-numeric:tabular-nums;
+      transition:transform .2s var(--ease-spring)}
+    .lot-badge-top.bump{transform:scale(1.22)}
 
-  if (!gasUrl || !token) {
-    console.error('Faltan variables de entorno: GAS_URL o NETLIFY_TOKEN');
-    return {
-      statusCode: 500,
-      headers: corsHeaders(),
-      body: JSON.stringify({
-        ok: false,
-        error: 'El servidor no está configurado correctamente. Contacta al administrador.'
-      })
-    };
-  }
+    /* ── Context strip ───────────────────────────────────────────── */
+    .context-strip{flex:0 0 auto;padding:8px 16px;
+      background:var(--surface-sunken);border-bottom:1px solid var(--border);
+      display:flex;align-items:center;gap:6px;flex-wrap:wrap;
+      font-family:var(--font-ui);font-size:.8rem;color:var(--text-2)}
+    .context-strip strong{color:var(--text);font-weight:700}
+    .context-sep{color:var(--border-2);font-size:.65rem}
+    .chip-sm{display:inline-flex;align-items:center;padding:2px 8px;
+      border-radius:var(--r-pill);background:var(--accent-soft);
+      color:var(--accent-ink);font-size:.75rem;font-weight:700}
 
-  // Parsear el cuerpo
-  let body;
-  try {
-    body = JSON.parse(event.body || '{}');
-  } catch (e) {
-    return {
-      statusCode: 400,
-      headers: corsHeaders(),
-      body: JSON.stringify({ ok: false, error: 'Cuerpo de la petición no es JSON válido.' })
-    };
-  }
+    /* ── Scanner area ────────────────────────────────────────────── */
+    .scanner-wrap{flex:0 0 auto;padding:12px 16px 8px;background:var(--bg)}
+    .capture-card{position:relative;width:100%;aspect-ratio:4/3;background:#030a08;
+      border-radius:22px;overflow:hidden;box-shadow:var(--shadow-lg);
+      border:1px solid rgba(255,255,255,.06);touch-action:manipulation}
+    .capture-card video{position:absolute;inset:0;width:100%;height:100%;
+      object-fit:cover;background:#000}
+    .capture-flash{position:absolute;inset:0;opacity:0;pointer-events:none;
+      z-index:4;transition:opacity .06s ease}
+    .capture-flash.ok{background:rgba(79,184,150,.45);opacity:1}
+    .capture-flash.err{background:rgba(158,45,34,.3);opacity:1}
+    .capture-overlay{position:absolute;inset:0;display:flex;align-items:center;
+      justify-content:center;pointer-events:none;
+      background:linear-gradient(to bottom,rgba(0,0,0,.15),rgba(0,0,0,.1))}
+    .capture-target{width:76%;max-width:320px;aspect-ratio:16/10;position:relative;
+      border-radius:16px;box-shadow:0 0 0 9999px rgba(0,0,0,.30)}
+    .capture-target::before,.capture-target::after,
+    .capture-target span::before,.capture-target span::after{
+      content:'';position:absolute;width:26px;height:26px;
+      border:2.5px solid #fff;border-radius:5px}
+    .capture-target::before{top:-2px;left:-2px;border-right:0;border-bottom:0}
+    .capture-target::after{top:-2px;right:-2px;border-left:0;border-bottom:0}
+    .capture-target span::before{bottom:-2px;left:-2px;border-right:0;border-top:0}
+    .capture-target span::after{bottom:-2px;right:-2px;border-left:0;border-top:0}
+    .scan-line{position:absolute;left:10%;right:10%;top:50%;height:1.5px;
+      background:linear-gradient(90deg,transparent,#4fb896,transparent);
+      box-shadow:0 0 10px #4fb896;opacity:.8;
+      animation:scanline 1.8s ease-in-out infinite}
+    @keyframes scanline{0%,100%{top:20%;opacity:.5}50%{top:80%;opacity:.9}}
+    .scan-line.paused{animation:scanline-wait 1.4s ease-in-out infinite}
+    @keyframes scanline-wait{0%,100%{opacity:.2}50%{opacity:.5}}
+    .capture-status{position:absolute;left:10px;right:10px;bottom:10px;
+      display:flex;gap:8px;align-items:center;padding:9px 13px;
+      background:rgba(0,0,0,.58);backdrop-filter:blur(10px);
+      -webkit-backdrop-filter:blur(10px);color:#fff;border-radius:var(--r-pill);
+      font-size:.84rem;font-family:var(--font-ui);z-index:2}
+    .status-dot{width:7px;height:7px;border-radius:50%;background:#4fb896;
+      box-shadow:0 0 8px #4fb896;flex-shrink:0;
+      animation:pulse-dot 1.6s ease infinite}
+    .status-dot.paused{background:var(--warning);box-shadow:0 0 8px var(--warning);animation:none}
+    @keyframes pulse-dot{0%,100%{opacity:1}50%{opacity:.35}}
+    #statusText{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .capture-hint{padding:8px 4px 0;text-align:center;color:var(--text-muted);
+      font-size:.82rem;font-family:var(--font-ui)}
 
-  // Validaciones básicas antes de llamar a GAS (ahorro de cuota)
-  if (!body.centroId)           return err400('Falta centroId.');
-  if (!body.estancia)           return err400('Falta estancia.');
-  if (!Array.isArray(body.codigos) || !body.codigos.length)
-                                return err400('No hay códigos en el lote.');
+    /* ── Main scroll area ────────────────────────────────────────── */
+    .main-scroll{flex:1 1 auto;overflow-y:auto;overflow-x:hidden;
+      -webkit-overflow-scrolling:touch;padding:10px 16px 24px}
 
-  // Llamada servidor-a-servidor a GAS (sin restricción CORS)
-  let gasData;
-  try {
-    const gasRes = await fetch(gasUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...body, token }),
-      redirect: 'follow'
-    });
+    /* ── Lot ─────────────────────────────────────────────────────── */
+    .lot-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+    .lot-count{display:inline-flex;align-items:center;gap:5px;padding:3px 11px;
+      border-radius:var(--r-pill);background:var(--primary);color:#fff;
+      font-family:var(--font-mono);font-size:.82rem;font-weight:500;
+      font-variant-numeric:tabular-nums;transition:transform .2s var(--ease-spring)}
+    .lot-count.bump{transform:scale(1.18)}
+    .lot-progress-wrap{margin-bottom:10px}
+    .lot-progress-bar{height:4px;border-radius:var(--r-pill);
+      background:var(--surface-sunken);overflow:hidden}
+    .lot-progress-fill{height:100%;border-radius:var(--r-pill);background:var(--primary);
+      transition:width .3s var(--ease-out)}
+    .lot-progress-label{font-size:.75rem;font-family:var(--font-mono);
+      color:var(--text-muted);margin-top:4px;text-align:right}
+    .lot-empty{padding:20px 16px;text-align:center;color:var(--text-muted);
+      font-size:.9rem;font-family:var(--font-ui);border:1.5px dashed var(--border-2);
+      border-radius:var(--r-md)}
+    .lot-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:5px}
+    .lot-item{display:flex;align-items:center;gap:9px;padding:9px 11px;
+      background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);
+      animation:item-in .22s var(--ease-spring) both}
+    @keyframes item-in{from{opacity:0;transform:translateY(8px) scale(.97)}to{opacity:1;transform:none}}
+    .lot-item .idx{flex:0 0 auto;width:24px;height:24px;border-radius:50%;
+      background:var(--primary-soft);color:var(--primary-ink);
+      display:flex;align-items:center;justify-content:center;
+      font-family:var(--font-mono);font-size:.72rem;font-weight:500}
+    .lot-item .code{flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+      font-family:var(--font-mono);font-size:.88rem;font-variant-numeric:tabular-nums;color:var(--text)}
+    .lot-item .remove{flex:0 0 auto;width:30px;height:30px;border:0;
+      border-radius:var(--r-sm);background:transparent;color:var(--text-muted);
+      cursor:pointer;display:flex;align-items:center;justify-content:center;
+      font-size:.85rem;transition:color .15s,background .15s}
+    .lot-item .remove:active{background:var(--danger-soft);color:var(--danger)}
+    .btn-add-manual{appearance:none;border:1.5px solid var(--border);background:var(--surface);
+      color:var(--text-muted);font-family:var(--font-ui);font-size:.85rem;font-weight:600;
+      padding:8px 14px;border-radius:var(--r-md);cursor:pointer;margin-top:10px;
+      display:flex;align-items:center;gap:6px;transition:border-color .15s,color .15s}
+    .btn-add-manual:active{border-color:var(--primary);color:var(--primary)}
+    .btn-add-manual svg{width:16px;height:16px;stroke:currentColor;fill:none;
+      stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 
-    const raw = await gasRes.text();
-    try   { gasData = JSON.parse(raw); }
-    catch (e) { throw new Error('Respuesta inesperada de GAS: ' + raw.slice(0, 200)); }
+    /* ── Actionbar ───────────────────────────────────────────────── */
+    .actionbar{flex:0 0 auto;padding:10px 16px calc(10px + var(--safe-bottom));
+      background:color-mix(in srgb,var(--bg) 92%,transparent);
+      backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+      border-top:1px solid var(--border);display:flex;flex-direction:column;gap:8px}
+    .btn{--btn-bg:var(--surface);--btn-fg:var(--text);--btn-border:var(--border);
+      appearance:none;border:1.5px solid var(--btn-border);background:var(--btn-bg);
+      color:var(--btn-fg);font-family:var(--font-ui);font-size:.95rem;font-weight:700;
+      letter-spacing:.02em;min-height:54px;padding:13px 20px;border-radius:var(--r-md);
+      display:inline-flex;align-items:center;justify-content:center;gap:8px;
+      cursor:pointer;width:100%;text-decoration:none;
+      transition:transform .12s ease,box-shadow .18s ease,background .18s ease,opacity .18s ease;
+      box-shadow:var(--shadow-sm);position:relative;overflow:hidden}
+    .btn::after{content:'';position:absolute;inset:0;background:transparent;transition:background .15s ease}
+    .btn:active:not(:disabled)::after{background:rgba(0,0,0,.06)}
+    .btn:active:not(:disabled){transform:translateY(1px) scale(.99)}
+    .btn:disabled{opacity:.45;cursor:not-allowed;box-shadow:none}
+    .btn svg{width:19px;height:19px;stroke:currentColor;fill:none;stroke-width:2;
+      stroke-linecap:round;stroke-linejoin:round}
+    .btn.primary{--btn-bg:var(--primary);--btn-fg:#fff;--btn-border:var(--primary);
+      box-shadow:0 2px 12px color-mix(in srgb,var(--primary) 35%,transparent),var(--shadow-sm)}
+    .btn.soft{--btn-bg:var(--primary-soft);--btn-fg:var(--primary-ink);--btn-border:transparent;box-shadow:none}
+    .btn.ghost{--btn-bg:transparent;--btn-border:transparent;box-shadow:none}
+    .btn.compact{min-height:44px;padding:9px 16px;font-size:.88rem}
 
-  } catch (fetchErr) {
-    console.error('Error llamando a GAS:', fetchErr.message);
-    return {
-      statusCode: 502,
-      headers: corsHeaders(),
-      body: JSON.stringify({ ok: false, error: 'No se pudo contactar con el servidor principal.' })
-    };
-  }
+    /* ── Éxito ───────────────────────────────────────────────────── */
+    .exito-wrap{display:flex;flex-direction:column;align-items:center;
+      padding:40px 20px 24px;text-align:center;gap:12px}
+    .exito-badge{width:84px;height:84px;border-radius:50%;background:var(--primary-soft);
+      border:2px solid var(--primary);display:flex;align-items:center;justify-content:center;
+      color:var(--primary);animation:badge-pop .5s var(--ease-spring) both}
+    @keyframes badge-pop{from{opacity:0;transform:scale(.6)}to{opacity:1;transform:scale(1)}}
+    .exito-badge svg{width:36px;height:36px;stroke:currentColor;fill:none;
+      stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round}
+    .exito-title{font-family:var(--font-body);font-style:italic;font-size:1.7rem;
+      font-weight:600;color:var(--text)}
+    .summary-card{width:100%;background:var(--surface);border:1px solid var(--border);
+      border-radius:var(--r-lg);padding:14px 18px;text-align:left;box-shadow:var(--shadow-sm)}
+    .summary-row{display:flex;justify-content:space-between;align-items:baseline;
+      padding:8px 0;border-bottom:1px solid var(--border);gap:12px;
+      font-family:var(--font-ui);font-size:.88rem}
+    .summary-row:last-child{border-bottom:0}
+    .summary-row span:first-child{color:var(--text-muted);font-size:.75rem;
+      letter-spacing:.05em;text-transform:uppercase;font-weight:700}
+    .summary-row span:last-child{color:var(--text);font-weight:600;font-family:var(--font-mono)}
 
-  return {
-    statusCode: 200,
-    headers: corsHeaders(),
-    body: JSON.stringify(gasData)
-  };
+    /* ── Sheet (modal bottom) ────────────────────────────────────── */
+    .sheet-backdrop{position:fixed;inset:0;background:rgba(16,24,22,.5);opacity:0;
+      pointer-events:none;transition:opacity .26s ease;z-index:1000}
+    .sheet-backdrop.open{opacity:1;pointer-events:auto}
+    .sheet{position:fixed;left:0;right:0;bottom:0;background:var(--surface);
+      border-radius:var(--r-xl) var(--r-xl) 0 0;
+      padding:8px 20px calc(24px + var(--safe-bottom));max-width:640px;margin:0 auto;
+      transform:translateY(100%);transition:transform .34s var(--ease-out);
+      box-shadow:0 -12px 40px rgba(16,24,22,.22);z-index:1001;
+      max-height:88dvh;overflow-y:auto}
+    .sheet.open{transform:translateY(0)}
+    .sheet-handle{width:40px;height:4px;border-radius:var(--r-pill);
+      background:var(--border-2);margin:8px auto 16px}
+    .sheet .field-label{display:block;font-size:.8rem;font-weight:700;
+      letter-spacing:.07em;text-transform:uppercase;color:var(--text-muted);margin-bottom:6px}
+    .sheet .input{width:100%;font-family:var(--font-ui);font-size:.95rem;color:var(--text);
+      background:var(--surface);border:1.5px solid var(--border);border-radius:var(--r-md);
+      padding:13px 15px;min-height:50px;transition:border-color .2s ease,box-shadow .2s ease}
+    .sheet .input:focus{outline:0;border-color:var(--primary);
+      box-shadow:0 0 0 3px color-mix(in srgb,var(--primary) 15%,transparent)}
+    textarea.input{min-height:96px;resize:vertical;line-height:1.5}
+    .sheet .actions{display:flex;flex-direction:column;gap:10px;margin-top:16px}
+    .mt-3{margin-top:16px}
+
+    /* ── Toasts ──────────────────────────────────────────────────── */
+    .toast-stack{position:fixed;left:50%;bottom:calc(24px + var(--safe-bottom));
+      transform:translateX(-50%);display:flex;flex-direction:column-reverse;gap:8px;
+      z-index:2000;pointer-events:none;width:calc(100% - 32px);max-width:480px;align-items:center}
+    .toast{pointer-events:auto;padding:11px 17px;border-radius:var(--r-pill);
+      background:var(--text);color:var(--text-inverse);font-family:var(--font-ui);
+      font-size:.88rem;font-weight:600;box-shadow:var(--shadow-lg);
+      display:inline-flex;align-items:center;gap:9px;max-width:100%;
+      animation:toast-in .22s var(--ease-spring) both}
+    @keyframes toast-in{from{opacity:0;transform:translateY(10px) scale(.96)}to{opacity:1;transform:none}}
+    .toast.ok{background:var(--success)}.toast.error{background:var(--danger)}.toast.warn{background:var(--warning)}
+
+    /* ── Spinner ─────────────────────────────────────────────────── */
+    .spinner{width:20px;height:20px;border:2px solid rgba(255,255,255,.3);
+      border-top-color:currentColor;border-right-color:currentColor;
+      border-radius:50%;animation:spin .7s linear infinite;display:inline-block}
+    @keyframes spin{to{transform:rotate(360deg)}}
+
+    /* ── Screens ─────────────────────────────────────────────────── */
+    .screen{display:none;flex-direction:column;flex:1 1 auto;overflow:hidden;min-height:0}
+    .screen.active{display:flex}
+    .hidden{display:none!important}
+  </style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ── Topbar ──────────────────────────────────────────────── -->
+  <header class="topbar">
+    <button class="icon-btn" id="btnBack" aria-label="Volver" onclick="goBack()">
+      <svg viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"/></svg>
+    </button>
+    <div class="topbar-title">Captura por vídeo</div>
+    <div class="lot-badge-top" id="lotBadgeTop">0</div>
+  </header>
+
+  <!-- ── Context strip ───────────────────────────────────────── -->
+  <div class="context-strip">
+    <strong id="ctxNombreCentro">—</strong>
+    <span class="context-sep">›</span>
+    <span id="ctxEstancia">—</span>
+    <span class="chip-sm" id="ctxUso" style="display:none">—</span>
+  </div>
+
+  <!-- ══ PANTALLA: ESCANEO ═══════════════════════════════════ -->
+  <div class="screen active" id="screenEscaneo">
+
+    <!-- Visor de cámara -->
+    <div class="scanner-wrap">
+      <div class="capture-card" id="captureCard">
+        <video id="cameraVideo" playsinline autoplay muted></video>
+        <div class="capture-flash" id="captureFlash"></div>
+        <div class="capture-overlay">
+          <div class="capture-target" id="captureTarget"><span></span></div>
+          <div class="scan-line paused" id="scanLine"></div>
+        </div>
+        <div class="capture-status">
+          <span class="status-dot paused" id="statusDot"></span>
+          <span id="statusText">Iniciando cámara…</span>
+        </div>
+      </div>
+      <div class="capture-hint">La lectura es automática — apunta al código y espera el pitido.</div>
+    </div>
+
+    <!-- Lista del lote -->
+    <div class="main-scroll">
+      <div class="lot-header">
+        <h3>Lote actual</h3>
+        <span class="lot-count" id="lotCount">0</span>
+      </div>
+      <div class="lot-progress-wrap">
+        <div class="lot-progress-bar">
+          <div class="lot-progress-fill" id="lotProgressFill" style="width:0%"></div>
+        </div>
+        <div class="lot-progress-label" id="lotProgressLabel">0 / 100</div>
+      </div>
+      <div class="lot-empty" id="lotEmpty">Apunta a un código de barras o QR para empezar.</div>
+      <ul class="lot-list" id="lotList"></ul>
+      <button class="btn-add-manual" id="btnAddManual" onclick="openAddManual()">
+        <svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        Añadir manualmente
+      </button>
+    </div>
+
+    <!-- Actionbar escaneo -->
+    <footer class="actionbar">
+      <button class="btn primary" id="btnEnviar" disabled onclick="confirmarEnvio()">
+        Captura al menos un código
+      </button>
+    </footer>
+  </div>
+
+  <!-- ══ PANTALLA: ÉXITO ═════════════════════════════════════ -->
+  <div class="screen" id="screenExito">
+    <div class="main-scroll">
+      <div class="exito-wrap">
+        <div class="exito-badge">
+          <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+        </div>
+        <div class="exito-title">¡Lote enviado!</div>
+        <p id="exitoSubtitle" style="font-size:.9rem">Los códigos se han cargado en la hoja del centro.</p>
+        <div class="summary-card">
+          <div class="summary-row"><span>Centro</span><span id="sumCentro">—</span></div>
+          <div class="summary-row"><span>Estancia</span><span id="sumEstancia">—</span></div>
+          <div class="summary-row"><span>Dispositivos</span><span id="sumTotal">—</span></div>
+          <div class="summary-row"><span>Rango</span><span id="sumRango">—</span></div>
+        </div>
+      </div>
+    </div>
+    <footer class="actionbar">
+      <button class="btn primary" onclick="seguirEscaneando()">Seguir capturando aquí</button>
+      <button class="btn ghost compact" onclick="goBack()">Volver a la app</button>
+    </footer>
+  </div>
+
+</div><!-- .app -->
+
+<!-- Sheet (modal) -->
+<div class="sheet-backdrop" id="sheetBackdrop" onclick="closeSheet()"></div>
+<div class="sheet" id="sheet">
+  <div class="sheet-handle"></div>
+  <div id="sheetContent"></div>
+</div>
+
+<!-- Canvas oculto para captura de frames -->
+<canvas id="captureCanvas" class="hidden"></canvas>
+
+<!-- Toasts -->
+<div class="toast-stack" id="toastStack"></div>
+
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script>
+(function () {
+'use strict';
+
+// ── Parámetros de URL ─────────────────────────────────────────
+const params   = new URLSearchParams(location.search);
+const CTX = {
+  centroId:     params.get('centro')      || '',
+  nombreCentro: params.get('nombreCentro')|| params.get('centro') || '—',
+  estancia:     params.get('estancia')    || '—',
+  uso:          params.get('uso')         || ''
 };
 
-// ── Helpers ──────────────────────────────────────────────────────────────
+// ── Estado ────────────────────────────────────────────────────
+const MAX_LOT    = 100;
+const SCAN_MS    = 450;    // intervalo entre intentos de lectura
+const COOLDOWN   = 1800;   // ms mínimos entre el mismo código
 
-function corsHeaders() {
-  return {
-    'Content-Type': 'application/json',
-    'Access-Control-Allow-Origin': '*'
+const state = {
+  codigos: [], mediaStream: null, videoTrack: null, imageCapture: null,
+  scanTimer: null, qr: null, scanning: false, processingCapture: false,
+  sendingLot: false, lastScan: '', lastScanAt: 0
+};
+
+// ── DOM refs ──────────────────────────────────────────────────
+const $  = id => document.getElementById(id);
+const el = {
+  video: $('cameraVideo'), flash: $('captureFlash'),
+  scanLine: $('scanLine'), statusDot: $('statusDot'), statusText: $('statusText'),
+  captureTarget: $('captureTarget'), captureCanvas: $('captureCanvas'),
+  lotCount: $('lotCount'), lotBadgeTop: $('lotBadgeTop'),
+  lotProgressFill: $('lotProgressFill'), lotProgressLabel: $('lotProgressLabel'),
+  lotEmpty: $('lotEmpty'), lotList: $('lotList'),
+  btnEnviar: $('btnEnviar'),
+  screenEscaneo: $('screenEscaneo'), screenExito: $('screenExito'),
+  sheet: $('sheet'), sheetBackdrop: $('sheetBackdrop'), sheetContent: $('sheetContent'),
+  toastStack: $('toastStack'),
+  ctxNombreCentro: $('ctxNombreCentro'), ctxEstancia: $('ctxEstancia'), ctxUso: $('ctxUso'),
+  sumCentro: $('sumCentro'), sumEstancia: $('sumEstancia'),
+  sumTotal: $('sumTotal'), sumRango: $('sumRango')
+};
+
+// ── Audio ─────────────────────────────────────────────────────
+let _audioCtx = null;
+function getAudioCtx() {
+  if (!_audioCtx || _audioCtx.state === 'closed') {
+    try { _audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e) {}
+  }
+  return _audioCtx;
+}
+function resumeAudio() { try { if (_audioCtx && _audioCtx.state === 'suspended') _audioCtx.resume(); } catch(e) {} }
+function beepPositive() {
+  try {
+    const ctx = getAudioCtx(); if (!ctx) return; resumeAudio();
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(880, ctx.currentTime);
+    o.frequency.exponentialRampToValueAtTime(1320, ctx.currentTime + .12);
+    g.gain.setValueAtTime(.0001, ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(.18, ctx.currentTime + .01);
+    g.gain.exponentialRampToValueAtTime(.0001, ctx.currentTime + .18);
+    o.connect(g).connect(ctx.destination); o.start(); o.stop(ctx.currentTime + .2);
+  } catch(e) {}
+}
+function beepNegative() {
+  try {
+    const ctx = getAudioCtx(); if (!ctx) return; resumeAudio();
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = 'triangle';
+    o.frequency.setValueAtTime(320, ctx.currentTime);
+    o.frequency.exponentialRampToValueAtTime(180, ctx.currentTime + .18);
+    g.gain.setValueAtTime(.0001, ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(.15, ctx.currentTime + .01);
+    g.gain.exponentialRampToValueAtTime(.0001, ctx.currentTime + .2);
+    o.connect(g).connect(ctx.destination); o.start(); o.stop(ctx.currentTime + .22);
+  } catch(e) {}
+}
+function vibrate(p) { try { if (navigator.vibrate) navigator.vibrate(p); } catch(e) {} }
+
+// ── Toast ─────────────────────────────────────────────────────
+function toast(msg, type = 'info', dur = 2600) {
+  const t = document.createElement('div');
+  t.className = 'toast ' + (type === 'info' ? '' : type);
+  t.textContent = msg;
+  el.toastStack.appendChild(t);
+  setTimeout(() => {
+    t.style.transition = 'opacity .22s ease, transform .22s ease';
+    t.style.opacity = '0'; t.style.transform = 'translateY(8px)';
+    setTimeout(() => t.remove(), 250);
+  }, dur);
+}
+
+// ── Sheet ─────────────────────────────────────────────────────
+function openSheet(html) {
+  el.sheetContent.innerHTML = html;
+  el.sheet.classList.add('open');
+  el.sheetBackdrop.classList.add('open');
+}
+function closeSheet() {
+  el.sheet.classList.remove('open');
+  el.sheetBackdrop.classList.remove('open');
+}
+
+// ── Contexto ──────────────────────────────────────────────────
+function initContext() {
+  el.ctxNombreCentro.textContent = CTX.nombreCentro;
+  el.ctxEstancia.textContent     = CTX.estancia;
+  if (CTX.uso) {
+    el.ctxUso.textContent = CTX.uso;
+    el.ctxUso.style.display = '';
+  }
+  document.title = CTX.estancia + ' · Captura';
+}
+
+// ── Navegación ────────────────────────────────────────────────
+function goBack() {
+  stopScanner();
+  if (document.referrer) { history.back(); } else { window.close(); }
+}
+function showScreen(name) {
+  el.screenEscaneo.classList.toggle('active', name === 'escaneo');
+  el.screenExito.classList.toggle('active',   name === 'exito');
+}
+
+// ── Cámara ────────────────────────────────────────────────────
+async function startScanner() {
+  if (state.mediaStream || state.scanning) return;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    setStatus('Cámara no disponible en este dispositivo.', true);
+    return;
+  }
+  setStatus('Activando cámara…', true);
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1440 } },
+      audio: false
+    });
+    state.mediaStream = stream;
+    state.videoTrack  = stream.getVideoTracks()[0] || null;
+    if (state.videoTrack && 'ImageCapture' in window) {
+      try { state.imageCapture = new ImageCapture(state.videoTrack); } catch(e) { state.imageCapture = null; }
+    }
+    el.video.srcObject = stream;
+    await el.video.play();
+    state.scanning = true;
+    el.scanLine.classList.remove('paused');
+    el.statusDot.classList.remove('paused');
+    setStatus('Apunta al código…');
+    state.scanTimer = setInterval(scanFrame, SCAN_MS);
+  } catch (err) {
+    const msg = err && err.name === 'NotAllowedError'
+      ? 'Permiso de cámara denegado. Actívalo en los ajustes del navegador.'
+      : 'No se pudo acceder a la cámara.';
+    setStatus(msg, true);
+    toast(msg, 'error', 5000);
+  }
+}
+
+function stopScanner() {
+  clearInterval(state.scanTimer); state.scanTimer = null;
+  try {
+    if (el.video.srcObject) el.video.srcObject = null;
+    if (state.mediaStream) state.mediaStream.getTracks().forEach(t => t.stop());
+  } catch(e) {}
+  state.mediaStream = null; state.videoTrack = null; state.imageCapture = null;
+  state.scanning = false;
+  el.scanLine.classList.add('paused');
+  el.statusDot.classList.add('paused');
+}
+
+function setStatus(msg, paused = false) {
+  el.statusText.textContent = msg;
+  el.scanLine.classList.toggle('paused', paused);
+  el.statusDot.classList.toggle('paused', paused);
+}
+
+// ── Captura y decodificación ──────────────────────────────────
+async function ensureQr() {
+  if (state.qr) return state.qr;
+  if (!window.Html5Qrcode) throw new Error('Librería QR no cargada.');
+  state.qr = new Html5Qrcode('_qrHidden', { verbose: false });
+  return state.qr;
+}
+
+async function captureFrameToFile() {
+  const video = el.video;
+  if (!video.videoWidth || !video.videoHeight) throw new Error('Cámara no lista.');
+  const rect      = el.captureTarget.getBoundingClientRect();
+  const videoRect = el.video.getBoundingClientRect();
+  const scaleX = video.videoWidth  / videoRect.width;
+  const scaleY = video.videoHeight / videoRect.height;
+  const cropX = Math.max(0, (rect.left - videoRect.left) * scaleX);
+  const cropY = Math.max(0, (rect.top  - videoRect.top)  * scaleY);
+  const cropW = Math.min(video.videoWidth  - cropX, rect.width  * scaleX);
+  const cropH = Math.min(video.videoHeight - cropY, rect.height * scaleY);
+  const canvas = el.captureCanvas;
+  canvas.width  = Math.max(1, Math.round(cropW));
+  canvas.height = Math.max(1, Math.round(cropH));
+  const ctx = canvas.getContext('2d', { alpha: false });
+  if (state.imageCapture && state.videoTrack && state.videoTrack.readyState === 'live') {
+    try {
+      const bm = await state.imageCapture.grabFrame();
+      ctx.drawImage(bm, cropX, cropY, cropW, cropH, 0, 0, canvas.width, canvas.height);
+    } catch(e) {
+      ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, canvas.width, canvas.height);
+    }
+  } else {
+    ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, canvas.width, canvas.height);
+  }
+  const blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', .92));
+  if (!blob) throw new Error('No se pudo generar imagen.');
+  return new File([blob], 'frame.jpg', { type: 'image/jpeg' });
+}
+
+async function scanFrame() {
+  if (state.processingCapture || !state.scanning) return;
+  state.processingCapture = true;
+  try {
+    const qr   = await ensureQr();
+    const file  = await captureFrameToFile();
+    const code  = String((await qr.scanFile(file, false)) || '').trim();
+    if (!code) return;
+
+    const now = Date.now();
+    if (code === state.lastScan && now - state.lastScanAt < COOLDOWN) {
+      return; // mismo código, demasiado pronto
+    }
+
+    if (state.codigos.indexOf(code) > -1) {
+      state.lastScan = code; state.lastScanAt = now;
+      setStatus('Código ya en el lote. Siguiente…');
+      beepNegative();
+      return;
+    }
+    if (state.codigos.length >= MAX_LOT) {
+      setStatus('Lote lleno. Envíalo antes de seguir.');
+      beepNegative();
+      return;
+    }
+
+    addCode(code);
+    state.lastScan = code; state.lastScanAt = now;
+    flashScreen('ok');
+    beepPositive();
+    vibrate([45, 30, 65]);
+    setStatus('Leído: ' + code.slice(0, 28) + (code.length > 28 ? '…' : ''));
+    toast('Código añadido', 'ok', 1200);
+
+    // Pequeña pausa antes de seguir escaneando
+    state.scanning = false;
+    el.scanLine.classList.add('paused');
+    setTimeout(() => {
+      if (state.mediaStream) {
+        state.scanning = true;
+        el.scanLine.classList.remove('paused');
+        setStatus('Apunta al siguiente código…');
+      }
+    }, 900);
+
+  } catch(e) {
+    // No se encontró código: silencioso
+  } finally {
+    state.processingCapture = false;
+  }
+}
+
+function flashScreen(type) {
+  el.flash.className = 'capture-flash ' + type;
+  setTimeout(() => { el.flash.className = 'capture-flash'; }, 180);
+}
+
+// ── Lote ─────────────────────────────────────────────────────
+function addCode(code) {
+  state.codigos.push(code);
+  renderLot();
+  updateActionbar();
+}
+
+function renderLot() {
+  const n = state.codigos.length, max = MAX_LOT;
+
+  // Badges
+  el.lotCount.textContent = String(n);
+  el.lotBadgeTop.textContent = String(n);
+  el.lotCount.classList.remove('bump'); void el.lotCount.offsetWidth; el.lotCount.classList.add('bump');
+  el.lotBadgeTop.classList.remove('bump'); void el.lotBadgeTop.offsetWidth; el.lotBadgeTop.classList.add('bump');
+
+  // Progress
+  const pct = Math.min(100, Math.round(n / max * 100));
+  el.lotProgressFill.style.width = pct + '%';
+  el.lotProgressFill.style.background = pct >= 100 ? 'var(--warning)' : 'var(--primary)';
+  el.lotProgressLabel.textContent = n + ' / ' + max;
+
+  // Empty / list
+  el.lotEmpty.style.display = n ? 'none' : '';
+  el.lotList.innerHTML = state.codigos.map((code, i) =>
+    `<li class="lot-item">
+      <span class="idx">${i + 1}</span>
+      <span class="code">${esc(code)}</span>
+      <button class="remove" type="button" data-i="${i}" aria-label="Eliminar">✕</button>
+    </li>`
+  ).join('');
+  el.lotList.querySelectorAll('[data-i]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.codigos.splice(Number(btn.dataset.i), 1);
+      renderLot(); updateActionbar();
+    });
+  });
+}
+
+function updateActionbar() {
+  const n = state.codigos.length;
+  const btn = el.btnEnviar;
+  if (state.sendingLot) {
+    btn.innerHTML = '<span class="spinner"></span> Enviando…';
+    btn.disabled = true;
+  } else if (n === 0) {
+    btn.textContent = 'Captura al menos un código';
+    btn.disabled = true;
+  } else {
+    btn.textContent = 'Enviar ' + n + ' código' + (n === 1 ? '' : 's') + ' a la hoja';
+    btn.disabled = false;
+  }
+}
+
+// ── Añadir manualmente ────────────────────────────────────────
+function openAddManual() {
+  openSheet(`
+    <h2>Añadir manualmente</h2>
+    <p>Pega uno o varios códigos separados por salto de línea, comas o espacios.</p>
+    <div class="mt-3">
+      <label class="field-label" for="manualInput">Códigos</label>
+      <textarea id="manualInput" class="input" placeholder="Ej. ABC123&#10;ABC124"></textarea>
+    </div>
+    <div class="actions">
+      <button class="btn primary" id="saveManual" type="button">Añadir al lote</button>
+      <button class="btn ghost" onclick="closeSheet()" type="button">Cancelar</button>
+    </div>`);
+  $('saveManual').onclick = () => {
+    const raw = ($('manualInput').value || '').split(/[\n,;\t ]+/).map(s => s.trim()).filter(Boolean);
+    if (!raw.length) { toast('No hay códigos válidos', 'warn'); return; }
+    let added = 0;
+    raw.forEach(code => {
+      if (state.codigos.indexOf(code) === -1 && state.codigos.length < MAX_LOT) {
+        state.codigos.push(code); added++;
+      }
+    });
+    renderLot(); updateActionbar();
+    closeSheet();
+    toast(added + ' código' + (added === 1 ? '' : 's') + ' añadido' + (added === 1 ? '' : 's'), 'ok');
   };
 }
 
-function err400(msg) {
-  return { statusCode: 400, headers: corsHeaders(), body: JSON.stringify({ ok: false, error: msg }) };
-} 
+// ── Envío ─────────────────────────────────────────────────────
+async function confirmarEnvio() {
+  if (!state.codigos.length) { toast('No hay códigos en el lote', 'warn'); return; }
+  state.sendingLot = true;
+  updateActionbar();
+  stopScanner();
+
+  try {
+    const res = await fetch('/api/enviar-lote', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        centroId: CTX.centroId,
+        estancia: CTX.estancia,
+        uso:      CTX.uso,
+        codigos:  state.codigos
+      })
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'Error en el servidor.');
+
+    // Éxito
+    el.sumCentro.textContent   = data.centro   || CTX.nombreCentro;
+    el.sumEstancia.textContent = data.estancia  || CTX.estancia;
+    el.sumTotal.textContent    = String(data.total || state.codigos.length);
+    el.sumRango.textContent    = (data.hoja || '') + (data.rangoCodigos ? ' · ' + data.rangoCodigos : '');
+    state.codigos = [];
+    renderLot();
+    showScreen('exito');
+
+  } catch (err) {
+    toast('No se pudo enviar: ' + (err.message || err), 'error', 5000);
+  } finally {
+    state.sendingLot = false;
+    updateActionbar();
+  }
+}
+
+function seguirEscaneando() {
+  showScreen('escaneo');
+  renderLot();
+  updateActionbar();
+  startScanner();
+}
+
+// ── Utils ─────────────────────────────────────────────────────
+function esc(v) {
+  return String(v == null ? '' : v)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+// ── Init ──────────────────────────────────────────────────────
+// Div oculto necesario para Html5Qrcode (no necesita estar visible)
+const qrDiv = document.createElement('div');
+qrDiv.id = '_qrHidden'; qrDiv.style.display = 'none';
+document.body.appendChild(qrDiv);
+
+initContext();
+renderLot();
+updateActionbar();
+
+// Esperar a que la librería QR esté disponible antes de arrancar la cámara
+if (window.Html5Qrcode) {
+  startScanner();
+} else {
+  window.addEventListener('load', startScanner);
+}
+
+// Detener cámara al salir
+window.addEventListener('pagehide', stopScanner);
+window.addEventListener('visibilitychange', () => {
+  if (document.hidden) { stopScanner(); }
+  else if (document.getElementById('screenEscaneo').classList.contains('active')) { startScanner(); }
+});
+
+})();
+</script>
+</body>
+</html>
