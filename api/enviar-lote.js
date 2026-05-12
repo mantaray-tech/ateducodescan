@@ -1,0 +1,107 @@
+// netlify/functions/enviar-lote.js
+//
+// Proxy entre la página de captura (Netlify) y el endpoint de Apps Script (GAS).
+// Necesario porque GAS no puede emitir cabeceras CORS en doPost.
+//
+// Variables de entorno requeridas en el panel de Netlify:
+//   GAS_URL        → URL de la web app de Apps Script (la que sirve el HTML)
+//   NETLIFY_TOKEN  → misma clave secreta que está en Script Properties → NETLIFY_TOKEN
+
+exports.handler = async (event) => {
+  // Solo se acepta POST (el navegador puede enviar un preflight OPTIONS)
+  if (event.httpMethod === 'OPTIONS') {
+    return {
+      statusCode: 204,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type'
+      },
+      body: ''
+    };
+  }
+
+  if (event.httpMethod !== 'POST') {
+    return {
+      statusCode: 405,
+      headers: corsHeaders(),
+      body: JSON.stringify({ ok: false, error: 'Método no permitido.' })
+    };
+  }
+
+  // Leer variables de entorno
+  const gasUrl = process.env.GAS_URL       || '';
+  const token  = process.env.NETLIFY_TOKEN || '';
+
+  if (!gasUrl || !token) {
+    console.error('Faltan variables de entorno: GAS_URL o NETLIFY_TOKEN');
+    return {
+      statusCode: 500,
+      headers: corsHeaders(),
+      body: JSON.stringify({
+        ok: false,
+        error: 'El servidor no está configurado correctamente. Contacta al administrador.'
+      })
+    };
+  }
+
+  // Parsear el cuerpo
+  let body;
+  try {
+    body = JSON.parse(event.body || '{}');
+  } catch (e) {
+    return {
+      statusCode: 400,
+      headers: corsHeaders(),
+      body: JSON.stringify({ ok: false, error: 'Cuerpo de la petición no es JSON válido.' })
+    };
+  }
+
+  // Validaciones básicas antes de llamar a GAS (ahorro de cuota)
+  if (!body.centroId)           return err400('Falta centroId.');
+  if (!body.estancia)           return err400('Falta estancia.');
+  if (!Array.isArray(body.codigos) || !body.codigos.length)
+                                return err400('No hay códigos en el lote.');
+
+  // Llamada servidor-a-servidor a GAS (sin restricción CORS)
+  let gasData;
+  try {
+    const gasRes = await fetch(gasUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...body, token }),
+      redirect: 'follow'
+    });
+
+    const raw = await gasRes.text();
+    try   { gasData = JSON.parse(raw); }
+    catch (e) { throw new Error('Respuesta inesperada de GAS: ' + raw.slice(0, 200)); }
+
+  } catch (fetchErr) {
+    console.error('Error llamando a GAS:', fetchErr.message);
+    return {
+      statusCode: 502,
+      headers: corsHeaders(),
+      body: JSON.stringify({ ok: false, error: 'No se pudo contactar con el servidor principal.' })
+    };
+  }
+
+  return {
+    statusCode: 200,
+    headers: corsHeaders(),
+    body: JSON.stringify(gasData)
+  };
+};
+
+// ── Helpers ──────────────────────────────────────────────────────────────
+
+function corsHeaders() {
+  return {
+    'Content-Type': 'application/json',
+    'Access-Control-Allow-Origin': '*'
+  };
+}
+
+function err400(msg) {
+  return { statusCode: 400, headers: corsHeaders(), body: JSON.stringify({ ok: false, error: msg }) };
+}
