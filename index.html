@@ -818,6 +818,12 @@ window.addEventListener('visibilitychange', () => {
   else if (document.getElementById('screenEscaneo').classList.contains('active')) { startScanner(); }
 });
 
+// ── Exponer funciones globales (necesario por el IIFE) ───────────────────
+window.goBack           = goBack;
+window.confirmarEnvio   = confirmarEnvio;
+window.seguirEscaneando = seguirEscaneando;
+window.closeSheet       = closeSheet;
+window.openAddManual    = openAddManual;
 })();
 </script>
 </body>
