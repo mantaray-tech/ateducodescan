@@ -344,7 +344,7 @@
 
     <!-- Actionbar escaneo -->
     <footer class="actionbar">
-      <button class="btn primary" id="btnEnviar" disabled onclick="confirmarEnvio()">
+      <button class="btn primary" id="btnEnviar" disabled onclick="revisarLote()">
         Captura al menos un código
       </button>
     </footer>
@@ -399,7 +399,8 @@ const CTX = {
   centroId:     params.get('centro')      || '',
   nombreCentro: params.get('nombreCentro')|| params.get('centro') || '—',
   estancia:     params.get('estancia')    || '—',
-  uso:          params.get('uso')         || ''
+  uso:          params.get('uso')         || '',
+  gasUrl:       params.get('gasUrl')      || ''
 };
 
 // ── Estado ────────────────────────────────────────────────────
@@ -702,14 +703,11 @@ function renderLot() {
 function updateActionbar() {
   const n = state.codigos.length;
   const btn = el.btnEnviar;
-  if (state.sendingLot) {
-    btn.innerHTML = '<span class="spinner"></span> Enviando…';
-    btn.disabled = true;
-  } else if (n === 0) {
+  if (n === 0) {
     btn.textContent = 'Captura al menos un código';
     btn.disabled = true;
   } else {
-    btn.textContent = 'Enviar ' + n + ' código' + (n === 1 ? '' : 's') + ' a la hoja';
+    btn.textContent = 'Revisar ' + n + ' código' + (n === 1 ? '' : 's') + ' →';
     btn.disabled = false;
   }
 }
@@ -743,41 +741,13 @@ function openAddManual() {
 }
 
 // ── Envío ─────────────────────────────────────────────────────
-async function confirmarEnvio() {
-  if (!state.codigos.length) { toast('No hay códigos en el lote', 'warn'); return; }
-  state.sendingLot = true;
-  updateActionbar();
+function revisarLote() {
+  if (!state.codigos.length) { toast('Captura al menos un código primero', 'warn'); return; }
+  if (!CTX.gasUrl) { toast('URL de retorno no disponible — vuelve atrás manualmente', 'warn', 4000); return; }
   stopScanner();
-
-  try {
-    const res = await fetch('/api/enviar-lote', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        centroId: CTX.centroId,
-        estancia: CTX.estancia,
-        uso:      CTX.uso,
-        codigos:  state.codigos
-      })
-    });
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.error || 'Error en el servidor.');
-
-    // Éxito
-    el.sumCentro.textContent   = data.centro   || CTX.nombreCentro;
-    el.sumEstancia.textContent = data.estancia  || CTX.estancia;
-    el.sumTotal.textContent    = String(data.total || state.codigos.length);
-    el.sumRango.textContent    = (data.hoja || '') + (data.rangoCodigos ? ' · ' + data.rangoCodigos : '');
-    state.codigos = [];
-    renderLot();
-    showScreen('exito');
-
-  } catch (err) {
-    toast('No se pudo enviar: ' + (err.message || err), 'error', 5000);
-  } finally {
-    state.sendingLot = false;
-    updateActionbar();
-  }
+  const returnUrl = CTX.gasUrl + '?c=' + encodeURIComponent(state.codigos.join(','));
+  try { window.top.location.href = returnUrl; }
+  catch(e) { window.location.href = returnUrl; }
 }
 
 function seguirEscaneando() {
@@ -820,7 +790,7 @@ window.addEventListener('visibilitychange', () => {
 
 // ── Exponer funciones globales (necesario por el IIFE) ───────────────────
 window.goBack           = goBack;
-window.confirmarEnvio   = confirmarEnvio;
+window.revisarLote      = revisarLote;
 window.seguirEscaneando = seguirEscaneando;
 window.closeSheet       = closeSheet;
 window.openAddManual    = openAddManual;
