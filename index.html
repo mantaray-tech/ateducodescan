@@ -393,6 +393,9 @@
 (function () {
 'use strict';
 
+// ── URL de retorno a la app GAS ────────────────────────────────
+const GAS_RETURN_URL = 'https://script.google.com/macros/s/AKfycbyaG3CTuF5bB0y3RZgCa4kjVu87M8s2KcbNXhhKnYQTPY-BuCJgChh_yRJvBWQuXXR8ww/exec';
+
 // ── Parámetros de URL ─────────────────────────────────────────
 const params   = new URLSearchParams(location.search);
 const CTX = {
@@ -743,9 +746,8 @@ function openAddManual() {
 // ── Envío ─────────────────────────────────────────────────────
 function revisarLote() {
   if (!state.codigos.length) { toast('Captura al menos un código primero', 'warn'); return; }
-  if (!CTX.gasUrl) { toast('URL de retorno no disponible — vuelve atrás manualmente', 'warn', 4000); return; }
   stopScanner();
-  const returnUrl = CTX.gasUrl + '?c=' + encodeURIComponent(state.codigos.join(','));
+  const returnUrl = GAS_RETURN_URL + '?c=' + encodeURIComponent(state.codigos.join(','));
   try { window.top.location.href = returnUrl; }
   catch(e) { window.location.href = returnUrl; }
 }
