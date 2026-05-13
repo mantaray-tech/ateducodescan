@@ -688,13 +688,14 @@ function renderLot() {
 
   // Empty / list
   el.lotEmpty.style.display = n ? 'none' : '';
-  el.lotList.innerHTML = state.codigos.map((code, i) =>
-    `<li class="lot-item">
-      <span class="idx">${i + 1}</span>
+  el.lotList.innerHTML = state.codigos.slice().reverse().map((code, di) => {
+    const ri = state.codigos.length - 1 - di;
+    return `<li class="lot-item">
+      <span class="idx">${ri + 1}</span>
       <span class="code">${esc(code)}</span>
-      <button class="remove" type="button" data-i="${i}" aria-label="Eliminar">✕</button>
-    </li>`
-  ).join('');
+      <button class="remove" type="button" data-i="${ri}" aria-label="Eliminar">✕</button>
+    </li>`;
+  }).join('');
   el.lotList.querySelectorAll('[data-i]').forEach(btn => {
     btn.addEventListener('click', () => {
       state.codigos.splice(Number(btn.dataset.i), 1);
@@ -744,12 +745,21 @@ function openAddManual() {
 }
 
 // ── Envío ─────────────────────────────────────────────────────
-function revisarLote() {
+async function revisarLote() {
   if (!state.codigos.length) { toast('Captura al menos un código primero', 'warn'); return; }
   stopScanner();
-  const returnUrl = GAS_RETURN_URL + '?c=' + encodeURIComponent(state.codigos.join(','));
-  try { window.top.location.href = returnUrl; }
-  catch(e) { window.location.href = returnUrl; }
+  try {
+    await navigator.clipboard.writeText(state.codigos.join('\n'));
+    const n = state.codigos.length;
+    toast('✓ ' + n + ' código' + (n===1?'':'s') + ' copiado' + (n===1?'':'s') + ' — volviendo a la app…', 'ok', 2500);
+    setTimeout(() => {
+      try { window.top.location.href = GAS_RETURN_URL; }
+      catch(e) { window.location.href = GAS_RETURN_URL; }
+    }, 1400);
+  } catch(err) {
+    // Fallback: navegar sin portapapeles y avisar
+    toast('No se pudo copiar automáticamente. Copia el lote manualmente y pégalo en la app.', 'warn', 5000);
+  }
 }
 
 function seguirEscaneando() {
